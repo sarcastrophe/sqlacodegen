@@ -124,7 +124,7 @@ def _render_column_type(coltype):
     return text
 
 
-def _render_column(column, show_name):
+def _render_column(column, show_name, definitions):
     kwarg = []
     is_sole_pk = column.primary_key and len(column.table.primary_key) == 1
     dedicated_fks = [c for c in column.foreign_keys if len(c.constraint.columns) == 1]
@@ -154,6 +154,9 @@ def _render_column(column, show_name):
             server_default = 'server_default=text("""\\\n{0}""")'.format(default_expr)
         else:
             server_default = 'server_default=text("{0}")'.format(default_expr)
+
+    if definitions:
+        return "'"+column.name+"'"
 
     return 'Column({0})'.format(', '.join(
         ([repr(column.name)] if show_name else []) +
@@ -264,7 +267,7 @@ class ModelTable(Model):
         text = 't_{0} = Table(\n    {0!r}, metadata,\n'.format(self.table.name)
 
         for column in self.table.columns:
-            text += '    {0},\n'.format(_render_column(column, True))
+            text += '    {0},\n'.format(_render_column(column, True, False))
 
         for constraint in sorted(self.table.constraints, key=_get_constraint_sort_key):
             if isinstance(constraint, PrimaryKeyConstraint):
@@ -286,11 +289,12 @@ class ModelTable(Model):
 class ModelClass(Model):
     parent_name = 'Base'
 
-    def __init__(self, table, association_tables, inflect_engine, detect_joined):
+    def __init__(self, table, association_tables, inflect_engine, detect_joined, definitions):
         super(ModelClass, self).__init__(table)
         self.name = self._tablename_to_classname(table.name, inflect_engine)
         self.children = []
         self.attributes = OrderedDict()
+        self.definitions = definitions
 
         # Assign attribute names for columns
         for column in table.columns:
@@ -376,7 +380,7 @@ class ModelClass(Model):
         for attr, column in self.attributes.items():
             if isinstance(column, Column):
                 show_name = attr != column.name
-                text += '    {0} = {1}\n'.format(attr, _render_column(column, show_name))
+                text += '    {0} = {1}\n'.format(attr, _render_column(column, show_name, self.definitions))
 
         # Render relationships
         if any(isinstance(value, Relationship) for value in self.attributes.values()):
@@ -476,7 +480,7 @@ class CodeGenerator(object):
     footer = ''
 
     def __init__(self, metadata, noindexes=False, noconstraints=False, nojoined=False, noinflect=False,
-                 noclasses=False):
+                 noclasses=False, definitions=False):
         super(CodeGenerator, self).__init__()
 
         if noinflect:
@@ -499,6 +503,7 @@ class CodeGenerator(object):
         # Iterate through the tables and create model classes when possible
         self.models = []
         self.collector = ImportCollector()
+        self.definitions = definitions
         classes = {}
         for table in sorted(metadata.tables.values(), key=lambda t: (t.schema or '', t.name)):
             # Support for Alembic and sqlalchemy-migrate -- never expose the schema version tables
@@ -543,7 +548,7 @@ class CodeGenerator(object):
             if noclasses or not table.primary_key or table.name in association_tables:
                 model = ModelTable(table)
             else:
-                model = ModelClass(table, links[table.name], inflect_engine, not nojoined)
+                model = ModelClass(table, links[table.name], inflect_engine, not nojoined, definitions)
                 classes[model.name] = model
 
             self.models.append(model)
@@ -567,10 +572,13 @@ class CodeGenerator(object):
         # Render the collected imports
         print(self.collector.render() + '\n\n', file=outfile)
 
-        if any(isinstance(model, ModelClass) for model in self.models):
-            print('Base = declarative_base()\nmetadata = Base.metadata', file=outfile)
+        if self.definitions:
+            print('class Base:\n    id = "id"', file=outfile)
         else:
-            print('metadata = MetaData()', file=outfile)
+            if any(isinstance(model, ModelClass) for model in self.models):
+                print('Base = declarative_base()\nmetadata = Base.metadata', file=outfile)
+            else:
+                print('metadata = MetaData()', file=outfile)
 
         # Render the model tables and classes
         for model in self.models:
