@@ -1,3 +1,7 @@
+This is a slightly altered version of sqlacodegen to generate class stubs from tables by passing a `--definitions` option.
+Everything is the same except `master` has been rewound to version 1.1.6 since that is what got installed and I made the change on.
+There are further commits in master after this final tag.
+
 This is a tool that reads the structure of an existing database and generates
 the appropriate SQLAlchemy model code, using the declarative style if
 possible.
